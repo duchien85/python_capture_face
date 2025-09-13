@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Face Capture</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background: #f0f0f0;
+        }
+        #video-container {
+            position: relative;
+            display: inline-block;
+        }
+        video, canvas {
+            border: 2px solid #333;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #status {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #333;
+        }
+        #count {
+            margin-top: 5px;
+            color: #007BFF;
+            font-size: 18px;
+        }
+        input {
+            padding: 5px;
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 15px;
+            margin: 10px;
+            border: none;
+            background: #007BFF;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background: gray;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+<h1>Face Capture</h1>
+<input type="text" id="personName" placeholder="Nhập tên người" />
+<br>
+<div id="video-container">
+    <video id="video" width="640" height="480" autoplay></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+</div>
+<div id="status">Trạng thái: Chưa chụp</div>
+<div id="count">0 / 50 ảnh</div>
+<br>
+<button id="startBtn">Bắt đầu chụp</button>
+<button id="stopBtn" disabled>Dừng</button>
+<button id="resetBtn">Reset thư mục</button>
+
+<script>
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctxOverlay = overlay.getContext('2d');
+    const statusDiv = document.getElementById('status');
+    const countDiv = document.getElementById('count');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    let capturing = false;
+    let captureInterval;
+    let resetFlag = false;
+    let imageCount = 0;
+    const MAX_IMAGES = 50;
+
+    // Mở camera
+    navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => {
+            video.srcObject = stream;
+        });
+
+    function drawBBox(bbox) {
+        ctxOverlay.clearRect(0, 0, overlay.width, overlay.height);
+        if (bbox && bbox.length === 4) {
+            ctxOverlay.strokeStyle = "lime";
+            ctxOverlay.lineWidth = 3;
+            const [x1, y1, x2, y2] = bbox;
+            ctxOverlay.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        }
+    }
+
+    function captureFrame() {
+        if (!capturing) return;
+        if (imageCount >= MAX_IMAGES) {
+            statusDiv.innerText = "Trạng thái: Đã đủ ảnh";
+            stopCapture();
+            return;
+        }
+
+        const personName = document.getElementById('personName').value.trim();
+        if (!personName) {
+            statusDiv.innerText = "⚠️ Vui lòng nhập tên người";
+            stopCapture();
+            return;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+
+        const imageData = canvas.toDataURL('image/jpeg');
+
+        fetch('/upload', {
+            method: 'POST',
+            body: new URLSearchParams({
+                person_name: personName,
+                image: imageData,
+                reset: resetFlag
+            }),
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        })
+            .then(res => res.json())
+            .then(data => {
+                statusDiv.innerText = "Trạng thái: " + data.message;
+                countDiv.innerText = `${data.count} / ${MAX_IMAGES} ảnh`;
+                imageCount = data.count;
+
+                drawBBox(data.bbox);
+
+                if (data.status === "done") {
+                    stopCapture();
+                }
+                resetFlag = false;
+            })
+            .catch(err => {
+                statusDiv.innerText = "❌ Lỗi server";
+                console.error(err);
+            });
+    }
+
+    function startCapture() {
+        capturing = true;
+        imageCount = 0;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        captureInterval = setInterval(captureFrame, 500);
+    }
+
+    function stopCapture() {
+        capturing = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        clearInterval(captureInterval);
+        ctxOverlay.clearRect(0, 0, overlay.width, overlay.height);
+    }
+
+    startBtn.onclick = startCapture;
+    stopBtn.onclick = stopCapture;
+
+    resetBtn.onclick = () => {
+        const personName = document.getElementById('personName').value.trim();
+        if (!personName) {
+            statusDiv.innerText = "⚠️ Vui lòng nhập tên người trước khi reset";
+            return;
+        }
+
+        fetch('/delete', {
+            method: 'POST',
+            body: new URLSearchParams({ person_name: personName }),
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        })
+            .then(res => res.json())
+            .then(data => {
+                statusDiv.innerText = "Trạng thái: " + data.message;
+                imageCount = 0;
+                countDiv.innerText = `0 / ${MAX_IMAGES} ảnh`;
+                ctxOverlay.clearRect(0, 0, overlay.width, overlay.height);
+            })
+            .catch(err => {
+                statusDiv.innerText = "❌ Lỗi khi gọi API delete";
+                console.error(err);
+            });
+    };
+    async function startCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            const video = document.getElementById("video");
+            video.srcObject = stream;
+        } catch (err) {
+            console.error("Không thể truy cập camera:", err);
+            alert("Không thể truy cập camera. Vui lòng dùng HTTPS hoặc localhost!");
+        }
+    }
+
+    document.addEventListener("DOMContentLoaded", startCamera);
+</script>
+</body>
+</html>
